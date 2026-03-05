@@ -1,46 +1,43 @@
+// index.js
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
 const express = require('express');
 
-// ===== ENV =====
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-const PORT = process.env.PORT || 8080;
+const TOKEN = process.env.DISCORD_TOKEN;
 
-// ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildBans,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildIntegrations,
+    GatewayIntentBits.GuildModeration,
   ],
   partials: [Partials.Channel, Partials.GuildMember]
 });
 
-// ===== WEB SERVER =====
+// ===== Web server =====
 const app = express();
-app.get("/", (req, res) => res.send("Bot çalışıyor 😎"));
-app.listen(PORT, () => console.log(`Web server ${PORT} portunda açık`));
+app.get('/', (req, res) => res.send('Bot çalışıyor 😎'));
+app.listen(8080, () => console.log('Web server 8080 portunda açık'));
 
-// ===== BACKUP =====
+// ===== Backup =====
 let backupChannels = {};
 let backupRoles = {};
-let backupMembers = {};
 
-// ===== BOT READY =====
-client.once(Events.ClientReady, async () => {
+// ===== Ready =====
+client.once('ready', async () => {
   console.log(`Bot açıldı: ${client.user.tag}`);
 
-  const guild = client.guilds.cache.get(GUILD_ID);
+  const guild = await client.guilds.fetch(GUILD_ID);
   if (!guild) return console.log('Sunucu bulunamadı!');
 
-  // Log kanalı
-  client.logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
-  if (client.logChannel) console.log('Log kanalı set edildi.');
+  client.logChannel = await guild.channels.fetch(LOG_CHANNEL_ID);
 
   // Kanalları yedekle
-  guild.channels.cache.forEach(ch => {
+  const channels = await guild.channels.fetch();
+  channels.forEach(ch => {
     backupChannels[ch.id] = {
       name: ch.name,
       type: ch.type,
@@ -54,7 +51,8 @@ client.once(Events.ClientReady, async () => {
   });
 
   // Rolleri yedekle
-  guild.roles.cache.forEach(r => {
+  const roles = await guild.roles.fetch();
+  roles.forEach(r => {
     backupRoles[r.id] = {
       name: r.name,
       color: r.color,
@@ -65,107 +63,74 @@ client.once(Events.ClientReady, async () => {
   });
 
   console.log('Kanallar ve roller yedeklendi.');
+  if (client.logChannel) client.logChannel.send('Log kanalı set edildi ve yedekler hazır.');
 });
 
-// ===== CHANNEL GUARD =====
+// ===== Kanal guard =====
 client.on(Events.ChannelDelete, async channel => {
   const guild = channel.guild;
-  const log = client.logChannel;
-
-  // Audit logdan kim sildi öğren
-  const audit = await guild.fetchAuditLogs({ limit: 1, type: 12 }); // CHANNEL_DELETE = 12
+  const audit = await guild.fetchAuditLogs({ type: 12, limit: 1 }); // CHANNEL_DELETE
   const executor = audit.entries.first()?.executor;
 
-  // Silen kişinin rollerini al
   if (executor) {
+    // Executor’un rollerini al
     const member = guild.members.cache.get(executor.id);
     if (member && member.roles.cache.size > 0) {
-      member.roles.set([]).catch(() => {});
-      if (log) log.send(`⚠️ ${executor.tag} kanal silince rollerini kaybetti.`);
+      await member.roles.set([]);
     }
   }
 
-  // Kanalı geri oluştur
   const data = backupChannels[channel.id];
   if (data) {
-    guild.channels.create({
+    await guild.channels.create({
       name: data.name,
       type: data.type,
       parent: data.parentId
-    }).then(() => {
-      if (log) log.send(`🟢 Kanal geri oluşturuldu: ${data.name}`);
     });
+    if (client.logChannel) client.logChannel.send(`🟢 Kanal geri oluşturuldu: ${data.name}`);
   }
 });
 
-// ===== ROLE GUARD =====
+// ===== Rol guard =====
 client.on(Events.RoleDelete, async role => {
   const guild = role.guild;
-  const log = client.logChannel;
-
-  const audit = await guild.fetchAuditLogs({ limit: 1, type: 32 }); // ROLE_DELETE = 32
+  const audit = await guild.fetchAuditLogs({ type: 32, limit: 1 }); // ROLE_DELETE
   const executor = audit.entries.first()?.executor;
 
   if (executor) {
     const member = guild.members.cache.get(executor.id);
     if (member && member.roles.cache.size > 0) {
-      member.roles.set([]).catch(() => {});
-      if (log) log.send(`⚠️ ${executor.tag} rol sildi ve rollerini kaybetti.`);
+      await member.roles.set([]);
     }
   }
 
-  // Rolü geri oluştur
   const data = backupRoles[role.id];
   if (data) {
-    guild.roles.create({
+    await guild.roles.create({
       name: data.name,
       color: data.color,
       permissions: data.permissions,
       hoist: data.hoist,
       mentionable: data.mentionable
-    }).then(() => {
-      if (log) log.send(`🟢 Rol geri oluşturuldu: ${data.name}`);
     });
+    if (client.logChannel) client.logChannel.send(`🟢 Rol geri oluşturuldu: ${data.name}`);
   }
 });
 
-// ===== MEMBER GUARD (Kick/Ban) =====
+// ===== Üye guard (kick/ban) =====
 client.on(Events.GuildMemberRemove, async member => {
   const guild = member.guild;
-  const log = client.logChannel;
-
-  const auditKick = await guild.fetchAuditLogs({ limit: 1, type: 20 }); // MEMBER_KICK = 20
-  const auditBan = await guild.fetchAuditLogs({ limit: 1, type: 22 }); // MEMBER_BAN_ADD = 22
-  const executor = auditKick.entries.first()?.executor || auditBan.entries.first()?.executor;
+  const audit = await guild.fetchAuditLogs({ type: 20, limit: 1 }); // MEMBER_KICK
+  const executor = audit.entries.first()?.executor;
 
   if (executor) {
     const execMember = guild.members.cache.get(executor.id);
     if (execMember && execMember.roles.cache.size > 0) {
-      execMember.roles.set([]).catch(() => {});
-      if (log) log.send(`⚠️ ${executor.tag} bir üyeyi attı/banladı, rollerini kaybetti.`);
+      await execMember.roles.set([]);
     }
+    if (client.logChannel) client.logChannel.send(`⚠️ ${executor.tag} üyenin rollerini kaybetti.`);
   }
 });
 
-// ===== ROL VERMEDE GUARD =====
-client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
-  const guild = oldMember.guild;
-  const log = client.logChannel;
-
-  // Rollerde değişiklik varsa
-  if (oldMember.roles.cache.size !== newMember.roles.cache.size) {
-    const audit = await guild.fetchAuditLogs({ limit: 1, type: 25 }); // MEMBER_ROLE_UPDATE = 25
-    const executor = audit.entries.first()?.executor;
-
-    if (executor) {
-      const execMember = guild.members.cache.get(executor.id);
-      if (execMember && execMember.roles.cache.size > 0) {
-        execMember.roles.set([]).catch(() => {});
-        if (log) log.send(`⚠️ ${executor.tag} rol verince rollerini kaybetti.`);
-      }
-    }
-  }
-});
-
-// ===== BOT LOGIN =====
-client.login(DISCORD_TOKEN);
+// ===== Bot login =====
+client.login(TOKEN);
