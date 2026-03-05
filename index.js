@@ -1,3 +1,4 @@
+console.log("Bot başlatılıyor...");
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
 const client = new Client({
   intents: [
