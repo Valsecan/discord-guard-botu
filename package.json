@@ -4,7 +4,7 @@
   "description": "Discord sunucu guard bot",
   "main": "index.js",
   "scripts": { "start": "node index.js" },
-  "engines": { "node": "22.x" },
+  "engines": { "node": "18.x" },
   "dependencies": {
     "discord.js": "14.11.0",
     "express": "^4.18.2"
