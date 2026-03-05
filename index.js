@@ -1,44 +1,32 @@
-const { Client, GatewayIntentBits, Events } = require("discord.js");
-const express = require("express");
-
-const TOKEN = process.env.DISCORD_TOKEN;
-const GUILD_ID = process.env.GUILD_ID;
-const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-
+const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildModeration
-  ]
+    GatewayIntentBits.GuildBans,
+    GatewayIntentBits.GuildModeration,
+  ],
+  partials: [Partials.Channel, Partials.GuildMember]
 });
 
-// web server
-const app = express();
-app.get("/", (req,res)=>res.send("Bot çalışıyor"));
-app.listen(8080,()=>console.log("Web server 8080 portunda açık"));
+const GUILD_ID = process.env.GUILD_ID;
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 
-let logChannel;
-
-// BACKUP
 let backupChannels = {};
 let backupRoles = {};
 
-// Ready
-client.once("clientReady", async () => {
-  console.log(`Bot açıldı: ${client.user.tag}`);
-
+client.once(Events.ClientReady, async () => {
   const guild = await client.guilds.fetch(GUILD_ID);
-  logChannel = await guild.channels.fetch(LOG_CHANNEL_ID);
+  client.logChannel = await guild.channels.fetch(LOG_CHANNEL_ID);
 
   // Kanalları yedekle
   const channels = await guild.channels.fetch();
-  channels.forEach(ch=>{
+  channels.forEach(ch => {
     backupChannels[ch.id] = {
       name: ch.name,
       type: ch.type,
       parentId: ch.parentId,
-      permissionOverwrites: ch.permissionOverwrites.cache.map(p=>({
+      permissionOverwrites: ch.permissionOverwrites.cache.map(p => ({
         id: p.id,
         allow: p.allow.bitfield,
         deny: p.deny.bitfield
@@ -48,7 +36,7 @@ client.once("clientReady", async () => {
 
   // Rolleri yedekle
   const roles = await guild.roles.fetch();
-  roles.forEach(r=>{
+  roles.forEach(r => {
     backupRoles[r.id] = {
       name: r.name,
       color: r.color,
@@ -58,76 +46,97 @@ client.once("clientReady", async () => {
     };
   });
 
-  console.log("Guard sistemi aktif ve yedekler hazır");
-  if(logChannel) logChannel.send("Guard sistemi aktif ve yedekler hazır");
+  if (client.logChannel) client.logChannel.send('Guard sistemi hazır ve yedekler alındı.');
 });
 
-// Helper: rollerini alma
-async function punish(guild, userId, reason){
-  const member = await guild.members.fetch(userId).catch(()=>null);
-  if(!member) return;
-  if(member.roles.highest.position >= guild.members.me.roles.highest.position) return;
-  await member.roles.set([]);
-  if(logChannel) logChannel.send(`🚨 ${member.user.tag} cezalandırıldı\nSebep: ${reason}`);
-}
-
-// KANAL DELETE GUARD
-client.on(Events.ChannelDelete, async channel=>{
-  const audit = await channel.guild.fetchAuditLogs({type:12, limit:1}); // CHANNEL_DELETE
+// Kanal silme
+client.on(Events.ChannelDelete, async channel => {
+  const guild = channel.guild;
+  const audit = await guild.fetchAuditLogs({ type: 12, limit: 1 });
   const executor = audit.entries.first()?.executor;
-  if(executor) punish(channel.guild, executor.id, "Kanal sildi");
 
+  // Silen kişinin rollerini al
+  if (executor) {
+    const member = guild.members.cache.get(executor.id);
+    if (member && member.roles.cache.size > 0) await member.roles.set([]);
+  }
+
+  // Kanalı geri oluştur
   const data = backupChannels[channel.id];
-  if(data){
-    await channel.guild.channels.create({
+  if (data) {
+    await guild.channels.create({
       name: data.name,
       type: data.type,
       parent: data.parentId,
-      permissionOverwrites: data.permissionOverwrites
+      permissionOverwrites: data.permissionOverwrites.map(p => ({
+        id: p.id,
+        allow: BigInt(p.allow),
+        deny: BigInt(p.deny)
+      }))
     });
-    if(logChannel) logChannel.send(`🟢 Kanal geri oluşturuldu: ${data.name}`);
+    if (client.logChannel) client.logChannel.send(`🟢 Kanal geri oluşturuldu: ${data.name}`);
   }
 });
 
-// ROL DELETE GUARD
-client.on(Events.RoleDelete, async role=>{
-  const audit = await role.guild.fetchAuditLogs({type:32, limit:1}); // ROLE_DELETE
+// Kanal açma
+client.on(Events.ChannelCreate, async channel => {
+  const guild = channel.guild;
+  const audit = await guild.fetchAuditLogs({ type: 10, limit: 1 });
   const executor = audit.entries.first()?.executor;
-  if(executor) punish(role.guild, executor.id, "Rol sildi");
+
+  if (executor) {
+    const member = guild.members.cache.get(executor.id);
+    if (member && member.roles.cache.size > 0) await member.roles.set([]);
+  }
+});
+
+// Rol silme
+client.on(Events.RoleDelete, async role => {
+  const guild = role.guild;
+  const audit = await guild.fetchAuditLogs({ type: 32, limit: 1 });
+  const executor = audit.entries.first()?.executor;
+
+  if (executor) {
+    const member = guild.members.cache.get(executor.id);
+    if (member && member.roles.cache.size > 0) await member.roles.set([]);
+  }
 
   const data = backupRoles[role.id];
-  if(data){
-    await role.guild.roles.create({
+  if (data) {
+    await guild.roles.create({
       name: data.name,
       color: data.color,
       permissions: data.permissions,
       hoist: data.hoist,
       mentionable: data.mentionable
     });
-    if(logChannel) logChannel.send(`🟢 Rol geri oluşturuldu: ${data.name}`);
+    if (client.logChannel) client.logChannel.send(`🟢 Rol geri oluşturuldu: ${data.name}`);
   }
 });
 
-// BAN GUARD
-client.on(Events.GuildBanAdd, async ban=>{
-  const audit = await ban.guild.fetchAuditLogs({type:22, limit:5});
-  const entry = audit.entries.find(x=>x.target.id===ban.user.id);
-  if(entry) punish(ban.guild, entry.executor.id, "Birini banladı");
+// Rol oluşturma
+client.on(Events.RoleCreate, async role => {
+  const guild = role.guild;
+  const audit = await guild.fetchAuditLogs({ type: 30, limit: 1 });
+  const executor = audit.entries.first()?.executor;
+
+  if (executor) {
+    const member = guild.members.cache.get(executor.id);
+    if (member && member.roles.cache.size > 0) await member.roles.set([]);
+  }
 });
 
-// KICK GUARD
-client.on(Events.GuildMemberRemove, async member=>{
-  const audit = await member.guild.fetchAuditLogs({type:20, limit:5});
-  const entry = audit.entries.find(x=>x.target.id===member.id);
-  if(entry) punish(member.guild, entry.executor.id, "Birini kickledi");
+// Kick/ban guard
+client.on(Events.GuildMemberRemove, async member => {
+  const guild = member.guild;
+  const audit = await guild.fetchAuditLogs({ type: 20, limit: 1 }); // Kick
+  const executor = audit.entries.first()?.executor;
+
+  if (executor) {
+    const execMember = guild.members.cache.get(executor.id);
+    if (execMember && execMember.roles.cache.size > 0) await execMember.roles.set([]);
+    if (client.logChannel) client.logChannel.send(`⚠️ ${executor.tag} üyenin rollerini kaybetti.`);
+  }
 });
 
-// ROL VERME GUARD
-client.on(Events.GuildMemberUpdate, async (oldMember,newMember)=>{
-  if(oldMember.roles.cache.size >= newMember.roles.cache.size) return;
-  const audit = await newMember.guild.fetchAuditLogs({type:25, limit:5});
-  const entry = audit.entries.first();
-  if(entry) punish(newMember.guild, entry.executor.id, "İzinsiz rol verdi");
-});
-
-client.login(TOKEN);
+client.login(process.env.DISCORD_TOKEN);
