@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, Events, AuditLogEvent } = require('discord.js');
-const express = require("express");
+const express = require('express');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
@@ -13,12 +13,11 @@ const client = new Client({
   ]
 });
 
-
-// Web server (Railway için)
 const app = express();
-app.get("/", (req,res)=>res.send("Guard Bot Aktif"));
+app.get("/", (req,res)=>res.send("Bot çalışıyor"));
 app.listen(8080, ()=>console.log("Web server 8080 portunda açık"));
 
+let logChannel;
 
 // READY
 client.once(Events.ClientReady, async () => {
@@ -26,21 +25,27 @@ client.once(Events.ClientReady, async () => {
   console.log(`Bot açıldı: ${client.user.tag}`);
 
   const guild = await client.guilds.fetch(GUILD_ID);
-  client.logChannel = await guild.channels.fetch(LOG_CHANNEL_ID);
+
+  logChannel = await guild.channels.fetch(LOG_CHANNEL_ID);
+
+  console.log("Guard sistemi aktif");
 
 });
 
 
-// YETKİLİ CEZALANDIRMA
-async function punish(guild, userId){
+// CEZA FONKSİYONU
+async function punish(guild, userId, reason){
 
-  const member = guild.members.cache.get(userId);
+  const member = await guild.members.fetch(userId).catch(()=>null);
 
   if(!member) return;
 
-  try{
-    await member.roles.set([]);
-  }catch{}
+  await member.roles.set([]);
+
+  if(logChannel){
+    logChannel.send(`🚨 ${member.user.tag} → ${reason} yaptığı için tüm rolleri alındı`);
+  }
+
 }
 
 
@@ -48,18 +53,14 @@ async function punish(guild, userId){
 client.on(Events.ChannelDelete, async channel => {
 
   const audit = await channel.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.ChannelDelete
+    type: AuditLogEvent.ChannelDelete,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(channel.guild, executor.id);
-
-  client.logChannel.send(`🚨 Kanal silindi | ${executor.tag}`);
+  punish(channel.guild, entry.executor.id, "kanal silme");
 
 });
 
@@ -68,20 +69,14 @@ client.on(Events.ChannelDelete, async channel => {
 client.on(Events.ChannelCreate, async channel => {
 
   const audit = await channel.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.ChannelCreate
+    type: AuditLogEvent.ChannelCreate,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(channel.guild, executor.id);
-
-  await channel.delete().catch(()=>{});
-
-  client.logChannel.send(`🚨 Kanal açıldı ve silindi | ${executor.tag}`);
+  punish(channel.guild, entry.executor.id, "kanal oluşturma");
 
 });
 
@@ -90,18 +85,14 @@ client.on(Events.ChannelCreate, async channel => {
 client.on(Events.RoleDelete, async role => {
 
   const audit = await role.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.RoleDelete
+    type: AuditLogEvent.RoleDelete,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(role.guild, executor.id);
-
-  client.logChannel.send(`🚨 Rol silindi | ${executor.tag}`);
+  punish(role.guild, entry.executor.id, "rol silme");
 
 });
 
@@ -110,108 +101,64 @@ client.on(Events.RoleDelete, async role => {
 client.on(Events.RoleCreate, async role => {
 
   const audit = await role.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.RoleCreate
+    type: AuditLogEvent.RoleCreate,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(role.guild, executor.id);
-
-  await role.delete().catch(()=>{});
-
-  client.logChannel.send(`🚨 Rol oluşturuldu ve silindi | ${executor.tag}`);
+  punish(role.guild, entry.executor.id, "rol oluşturma");
 
 });
 
 
-// ROL VERME / ALMA
+// ROL VERME
 client.on(Events.GuildMemberUpdate, async (oldMember,newMember)=>{
 
-  if(oldMember.roles.cache.size === newMember.roles.cache.size) return;
+  if(oldMember.roles.cache.size >= newMember.roles.cache.size) return;
 
   const audit = await newMember.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.MemberRoleUpdate
+    type: AuditLogEvent.MemberRoleUpdate,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  if(executor.id === newMember.id) return;
-
-  await punish(newMember.guild, executor.id);
-
-  client.logChannel.send(`🚨 İzinsiz rol işlemi | ${executor.tag}`);
+  punish(newMember.guild, entry.executor.id, "rol verme");
 
 });
 
 
-// KICK GUARD
-client.on(Events.GuildMemberRemove, async member => {
-
-  const audit = await member.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.MemberKick
-  });
-
-  const entry = audit.entries.first();
-  if(!entry) return;
-
-  const executor = entry.executor;
-
-  await punish(member.guild, executor.id);
-
-  client.logChannel.send(`🚨 Kick atıldı | ${executor.tag}`);
-
-});
-
-
-// BAN GUARD
+// BAN
 client.on(Events.GuildBanAdd, async ban => {
 
   const audit = await ban.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.MemberBanAdd
+    type: AuditLogEvent.MemberBanAdd,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(ban.guild, executor.id);
-
-  client.logChannel.send(`🚨 Ban atıldı | ${executor.tag}`);
+  punish(ban.guild, entry.executor.id, "ban atma");
 
 });
 
 
-// BOT EKLEME GUARD
-client.on(Events.GuildMemberAdd, async member => {
-
-  if(!member.user.bot) return;
+// KICK
+client.on(Events.GuildMemberRemove, async member => {
 
   const audit = await member.guild.fetchAuditLogs({
-    limit:1,
-    type:AuditLogEvent.BotAdd
+    type: AuditLogEvent.MemberKick,
+    limit:1
   });
 
   const entry = audit.entries.first();
   if(!entry) return;
 
-  const executor = entry.executor;
-
-  await punish(member.guild, executor.id);
-
-  await member.ban().catch(()=>{});
-
-  client.logChannel.send(`🚨 Bot eklendi ve banlandı | ${executor.tag}`);
+  punish(member.guild, entry.executor.id, "kick atma");
 
 });
 
