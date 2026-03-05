@@ -1,13 +1,13 @@
 {
   "name": "discord-guard-bot",
   "version": "1.0.0",
-  "description": "Discord sunucu guard bot (kanal, rol, üye koruma + log)",
+  "description": "Discord sunucu guard bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "engines": {
-    "node": "18.x"
+    "node": "22.x"
   },
   "dependencies": {
     "discord.js": "^14.11.0",
